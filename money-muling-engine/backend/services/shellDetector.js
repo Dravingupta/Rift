@@ -1,98 +1,109 @@
+import { generateRingId } from '../utils/ringIdGenerator.js';
+
 /**
- * Detects Shell Networks (Layered chains with low-activity intermediates).
- * Pattern: A -> B -> C -> D, where B and C have totalTransactions <= 3.
- * Path length >= 3.
- * @param {Object} adjacencyList - Graph adjacency list.
- * @param {Object} accountStats - Account statistics.
- * @returns {Object} - Detected shell networks.
+ * Detects Shell Networks using connected components on a filtered subgraph.
+ *
+ * Approach:
+ *   1. Filter accounts to only those with low activity (≤ 3 tx), short lifespan
+ *      (≤ 30 days), and low volume (≤ 10 tx). These are candidate shell accounts.
+ *   2. Build an undirected graph among these candidates using the original
+ *      directed adjacency list (if A→B exists and both are candidates, connect them).
+ *   3. Find connected components via BFS.
+ *   4. Keep components with ≥ 3 members — these are the shell networks.
+ *   5. Discard any component whose sorted member set is identical to a cycle ring.
+ *
+ * This guarantees maximal sets (no sub-chains) and O(V+E) performance.
  */
-export const detectShellNetworks = (adjacencyList, accountStats) => {
+export const detectShellNetworks = (adjacencyList, accountStats, cycleResults) => {
     const detectedRings = [];
     const uniqueRingKeys = new Set();
     const accountsInShellNetworks = new Set();
-    const nodes = Object.keys(adjacencyList);
 
-    const MAX_DEPTH = 5;
-    const MIN_LENGTH = 3;
     const LOW_ACTIVITY_THRESHOLD = 3;
+    const HIGH_VOLUME_THRESHOLD = 10;
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-    for (const startNode of nodes) {
-        // Stack for DFS: [currentNode, pathArray, visitedSet]
-        // Using iterative DFS or recursive. Recursive is cleaner for depth-limited.
+    // 1. Build set of cycle ring keys so we can skip duplicates
+    const cycleRingKeys = new Set();
+    if (cycleResults && cycleResults.detectedRings) {
+        for (const ring of cycleResults.detectedRings) {
+            const key = [...ring.member_accounts].sort().join('|');
+            cycleRingKeys.add(key);
+        }
+    }
 
-        const dfs = (currentNode, path, visited) => {
-            if (path.length > MAX_DEPTH) return;
+    // 2. Identify candidate shell accounts (low-activity, short-lived, low-volume)
+    const candidates = new Set();
+    for (const [accId, stats] of Object.entries(accountStats)) {
+        if (stats.totalTransactions > HIGH_VOLUME_THRESHOLD) continue;
 
-            // Check if current path is a valid shell network
-            // Valid if length >= 3
-            // AND intermediate nodes (index 1 to length-2) are low activity
-            // We check the condition every time we extend, but we only save if length >= 3
+        const lifeSpanMs = new Date(stats.lastTransaction) - new Date(stats.firstTransaction);
+        if (lifeSpanMs > THIRTY_DAYS_MS) continue;
 
-            if (path.length >= MIN_LENGTH) {
-                // Validation: Check intermediates
-                // Intermediates are path[1] ... path[path.length - 2]
-                let isValidShell = true;
-                for (let i = 1; i < path.length - 1; i++) {
-                    const intermediate = path[i];
-                    const stats = accountStats[intermediate];
-                    if (!stats || stats.totalTransactions > LOW_ACTIVITY_THRESHOLD) {
-                        isValidShell = false;
-                        break;
-                    }
-                }
+        if (stats.totalTransactions <= LOW_ACTIVITY_THRESHOLD) {
+            candidates.add(accId);
+        }
+    }
 
-                if (isValidShell) {
-                    // Save this path as a ring/chain
-                    const sortedMembers = [...path].sort();
-                    const ringKey = sortedMembers.join('|');
+    // 3. Build undirected adjacency among candidates
+    const undirected = new Map();
+    for (const node of candidates) {
+        undirected.set(node, new Set());
+    }
 
-                    if (!uniqueRingKeys.has(ringKey)) {
-                        uniqueRingKeys.add(ringKey);
-
-                        detectedRings.push({
-                            ring_id: `RING_${String(detectedRings.length + 1).padStart(3, '0')}`,
-                            member_accounts: sortedMembers, // Sorted as requested, though usually chain order matters for visualization
-                            ordered_path: [...path], // Keeping ordered path might be useful but requirement says member_accounts sorted
-                            pattern_type: 'shell_network'
-                        });
-
-                        path.forEach(acc => accountsInShellNetworks.add(acc));
-                    }
-                    // Continue searching? Yes, A->B->C (valid) -> D (also valid)
-                }
+    for (const [source, neighbors] of Object.entries(adjacencyList)) {
+        for (const target of neighbors) {
+            // Both endpoints must be candidates OR source/target connects to a candidate
+            // We want edges where at least one side is a candidate and both appear in the graph
+            if (candidates.has(source) && candidates.has(target)) {
+                undirected.get(source).add(target);
+                undirected.get(target).add(source);
             }
+        }
+    }
 
-            const neighbors = adjacencyList[currentNode] || [];
-            for (const neighbor of neighbors) {
+    // 4. BFS to find connected components
+    const visited = new Set();
+
+    for (const node of candidates) {
+        if (visited.has(node)) continue;
+
+        const component = [];
+        const queue = [node];
+        visited.add(node);
+
+        while (queue.length > 0) {
+            const current = queue.shift();
+            component.push(current);
+
+            for (const neighbor of undirected.get(current)) {
                 if (!visited.has(neighbor)) {
-                    // Optimization: If we are extending a chain, the CURRENT node (becoming intermediate)
-                    // must satisfy the low activity rule if it's not the start node.
-
-                    // If we are at A->B. We want to go to C.
-                    // B is now an intermediate. Is B low activity?
-                    // If path.length >= 2, the last element of path is `currentNode`.
-                    // It will become an intermediate if we go to `neighbor`.
-                    // Exception: The `startNode` (path[0]) never needs to be low activity.
-
-                    if (path.length >= 2) { // path has [Start, ... , Current]
-                        const stats = accountStats[currentNode];
-                        // If current node (which will lie between Start and Neighbor) is active,
-                        // we cannot pass through it for a shell chain.
-                        if (stats && stats.totalTransactions > LOW_ACTIVITY_THRESHOLD) {
-                            continue; // Prune branch
-                        }
-                    }
-
                     visited.add(neighbor);
-                    path.push(neighbor);
-                    dfs(neighbor, path, visited);
-                    path.pop();
-                    visited.delete(neighbor);
+                    queue.push(neighbor);
                 }
             }
-        };
+        }
 
-        dfs(startNode, [startNode], new Set([startNode]));
+        // 5. Keep only components with >= 3 members
+        if (component.length < 3) continue;
+
+        const sortedMembers = component.sort();
+        const ringKey = sortedMembers.join('|');
+
+        // Skip if identical to a cycle ring
+        if (cycleRingKeys.has(ringKey)) continue;
+
+        // Skip duplicates (shouldn't happen with BFS, but defensive)
+        if (uniqueRingKeys.has(ringKey)) continue;
+        uniqueRingKeys.add(ringKey);
+
+        detectedRings.push({
+            ring_id: generateRingId(),
+            member_accounts: sortedMembers,
+            pattern_type: 'shell_network'
+        });
+
+        sortedMembers.forEach(acc => accountsInShellNetworks.add(acc));
     }
 
     return {

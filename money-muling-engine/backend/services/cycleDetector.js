@@ -1,3 +1,5 @@
+import { generateRingId } from '../utils/ringIdGenerator.js';
+
 /**
  * Detects directed cycles of length 3 to 5 in the graph.
  * @param {Object} adjacencyList - The graph adjacency list.
@@ -39,9 +41,8 @@ export const detectCycles = (adjacencyList) => {
                     if (!uniqueRingKeys.has(pKey)) {
                         uniqueRingKeys.add(pKey);
 
-                        // Add to results
                         detectedRings.push({
-                            ring_id: `RING_${String(detectedRings.length + 1).padStart(3, '0')}`,
+                            ring_id: generateRingId(),
                             member_accounts: sortedNodes,
                             pattern_type: 'cycle',
                         });

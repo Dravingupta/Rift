@@ -1,3 +1,5 @@
+import { generateRingId } from '../utils/ringIdGenerator.js';
+
 /**
  * Detects Smurfing patterns (Fan-In/Fan-Out).
  * Rules: 10+ unique accounts within 72-hour window.
@@ -91,7 +93,7 @@ export const detectSmurfing = (transactions) => {
                 distinctRings.add(ringKey);
 
                 detectedRings.push({
-                    ring_id: `RING_${String(detectedRings.length + 1).padStart(3, '0')}`,
+                    ring_id: generateRingId(),
                     member_accounts: members,
                     pattern_type: 'smurfing_fan_out',
                     main_account: sender
@@ -111,7 +113,7 @@ export const detectSmurfing = (transactions) => {
                 distinctRings.add(ringKey);
 
                 detectedRings.push({
-                    ring_id: `RING_${String(detectedRings.length + 1).padStart(3, '0')}`,
+                    ring_id: generateRingId(),
                     member_accounts: members,
                     pattern_type: 'smurfing_fan_in',
                     main_account: receiver

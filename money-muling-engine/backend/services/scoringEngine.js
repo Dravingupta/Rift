@@ -1,7 +1,14 @@
 /**
- * Calculates suspicion scores for all accounts based on detected patterns and behavior.
- * @param {Object} data - Contains accountStats, cycleResults, smurfResults, shellResults, transactionsByAccount.
- * @returns {Object} - Suspicious accounts list.
+ * Calculates suspicion scores for all accounts.
+ *
+ * Scoring philosophy:
+ *   - cycle        = STRONG signal (40 pts) — circular money routing
+ *   - smurfing     = MEDIUM signal (25 pts) — structuring to avoid thresholds
+ *   - shell        = WEAK signal  (10 pts) — only meaningful when combined
+ *   - high_velocity = behavioral  (10 pts) — burst of activity
+ *   - short_active  = behavioral  ( 5 pts) — account used briefly
+ *
+ * Threshold: 35.  Shell-only (even + short_active) is NOT enough to flag.
  */
 export const calculateSuspicionScores = ({
     accountStats,
@@ -13,45 +20,30 @@ export const calculateSuspicionScores = ({
     const suspiciousAccounts = [];
     const accounts = Object.keys(accountStats);
 
-    // Scoring Weights
     const SCORES = {
         CYCLE: 40,
         SMURFING: 25,
-        SHELL: 30,
+        SHELL: 10,
         HIGH_VELOCITY: 10,
         SHORT_ACTIVE: 5,
         MITIGATION: -20
     };
 
-    // Helper sets for quick lookup
+    const MIN_SUSPICION_THRESHOLD = 35;
+
     const cycleMembers = new Set(cycleResults.accountsInCycles);
     const smurfMembers = new Set(smurfResults.accountsInSmurfing);
     const shellMembers = new Set(shellResults.accountsInShellNetworks);
 
-    // Helper to check high velocity (>= 5 tx in 24h)
     const checkHighVelocity = (txs) => {
         if (!txs || txs.length < 5) return false;
-
-        // Sort logic is already applied in smurfing detector but transactionsByAccount 
-        // from graphBuilder might strictly be insertion order. Let's sort to be safe.
-        // Note: optimization - if we trust input is roughly sorted or mostly sorted it's fast.
-        // But graphBuilder pushes in order of CSV appearance. 
-        // We should create a sorted copy to avoid mutating original if it matters, 
-        // but here we just need to check windows.
-
-        // sorting inside loop over 10k accounts might be slow if many txs.
-        // Assuming CSV was chronologically sorted? Not guaranteed.
-        // Let's sort.
         const sortedTxs = [...txs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
         const WINDOW_MS = 24 * 60 * 60 * 1000;
         let left = 0;
-
         for (let right = 0; right < sortedTxs.length; right++) {
             while (new Date(sortedTxs[right].timestamp) - new Date(sortedTxs[left].timestamp) > WINDOW_MS) {
                 left++;
             }
-            // window size = right - left + 1
             if (right - left + 1 >= 5) return true;
         }
         return false;
@@ -63,19 +55,31 @@ export const calculateSuspicionScores = ({
         const patterns = [];
         const relatedRings = [];
 
-        // 1. Pattern Matching
+        const firstTx = new Date(stats.firstTransaction);
+        const lastTx = new Date(stats.lastTransaction);
+        const lifeSpanMs = lastTx - firstTx;
+        const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+
+        // Track which signal categories are present
+        let hasCycle = false;
+        let hasSmurfing = false;
+        let hasShell = false;
+
+        // 1. Cycle — strong signal
         if (cycleMembers.has(accId)) {
+            hasCycle = true;
             score += SCORES.CYCLE;
             patterns.push('cycle');
-            // Find detected rings for this account
             cycleResults.detectedRings.forEach(ring => {
                 if (ring.member_accounts.includes(accId)) relatedRings.push(ring.ring_id);
             });
         }
 
+        // 2. Smurfing — medium signal
         if (smurfMembers.has(accId)) {
+            hasSmurfing = true;
             score += SCORES.SMURFING;
-            patterns.push('smurfing'); // Could distinguish fan_in/fan_out if we looked closer at detectedRings
+            patterns.push('smurfing');
             smurfResults.detectedRings.forEach(ring => {
                 if (ring.member_accounts.includes(accId)) {
                     if (!patterns.includes(ring.pattern_type)) patterns.push(ring.pattern_type);
@@ -84,63 +88,75 @@ export const calculateSuspicionScores = ({
             });
         }
 
-        // Clean up duplicate 'smurfing' tag if we added specific ones
         if (patterns.includes('smurfing') && (patterns.includes('smurfing_fan_in') || patterns.includes('smurfing_fan_out'))) {
             const idx = patterns.indexOf('smurfing');
             patterns.splice(idx, 1);
         }
 
+        // 3. Shell — weak signal, with false-positive guard
         if (shellMembers.has(accId)) {
-            score += SCORES.SHELL;
-            patterns.push('shell_network');
-            shellResults.detectedRings.forEach(ring => {
-                if (ring.member_accounts.includes(accId)) relatedRings.push(ring.ring_id);
-            });
+            const uniqueConnections = new Set([
+                ...(transactionsByAccount[accId] || []).map(tx => tx.sender_id),
+                ...(transactionsByAccount[accId] || []).map(tx => tx.receiver_id)
+            ]);
+            uniqueConnections.delete(accId);
+
+            const isLegitimate =
+                stats.totalTransactions > 10 ||
+                lifeSpanMs > thirtyDaysMs ||
+                uniqueConnections.size > 20;
+
+            if (!isLegitimate) {
+                hasShell = true;
+                score += SCORES.SHELL;
+                patterns.push('shell_network');
+                shellResults.detectedRings.forEach(ring => {
+                    if (ring.member_accounts.includes(accId)) relatedRings.push(ring.ring_id);
+                });
+            }
         }
 
-        // 2. Behavioral Signals
+        // 4. High Velocity — behavioral
         const txs = transactionsByAccount[accId] || [];
-
-        // High Velocity
         if (checkHighVelocity(txs)) {
             score += SCORES.HIGH_VELOCITY;
             patterns.push('high_velocity');
         }
 
-        // Short Active Period (< 3 days)
-        const firstTx = new Date(stats.firstTransaction);
-        const lastTx = new Date(stats.lastTransaction);
-        const lifeSpanMs = lastTx - firstTx;
+        // 5. Short Active Period (< 3 days)
         const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
-
         if (lifeSpanMs < threeDaysMs) {
             score += SCORES.SHORT_ACTIVE;
             patterns.push('short_active_period');
         }
 
-        // 3. Mitigation (False Positive Reduction)
-        // Active > 30 days AND total tx > 50
-        const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+        // 6. Mitigation — long-term high-volume accounts
         if (lifeSpanMs > thirtyDaysMs && stats.totalTransactions > 50) {
             score += SCORES.MITIGATION;
-            // We don't add a 'mitigated' pattern tag usually, just reduce score
         }
 
-        // 4. Normalization
+        // 7. Normalize to 0-100
         score = Math.max(0, Math.min(100, score));
 
-        if (score > 0) {
+        // 8. Escalation guard: shell-only accounts must NOT be flagged
+        //    Even shell + short_active (10 + 5 = 15) won't reach threshold of 35,
+        //    but we add an explicit guard for clarity.
+        if (hasShell && !hasCycle && !hasSmurfing) {
+            // Shell-only or shell + behavioral — not enough to flag
+            continue;
+        }
+
+        // 9. Threshold gate
+        if (score >= MIN_SUSPICION_THRESHOLD) {
             suspiciousAccounts.push({
                 account_id: accId,
                 suspicion_score: score,
-                detected_patterns: [...new Set(patterns)], // Dedupe
-                ring_ids: [...new Set(relatedRings)] // Dedupe
+                detected_patterns: [...new Set(patterns)],
+                ring_ids: [...new Set(relatedRings)]
             });
         }
     }
 
-    // Sort descending by score
     suspiciousAccounts.sort((a, b) => b.suspicion_score - a.suspicion_score);
-
     return { suspiciousAccounts };
 };
