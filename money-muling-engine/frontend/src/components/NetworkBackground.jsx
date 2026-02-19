@@ -1,3 +1,4 @@
+// updated ui
 import React, { useEffect, useRef } from 'react';
 
 const NetworkBackground = () => {

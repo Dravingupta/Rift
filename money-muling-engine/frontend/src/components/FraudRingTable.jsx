@@ -1,3 +1,5 @@
+// updated ui
+
 import React from 'react';
 
 const FraudRingTable = ({ rings }) => {
