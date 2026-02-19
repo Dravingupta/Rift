@@ -4,30 +4,28 @@ const FraudRingTable = ({ rings }) => {
     if (!rings || rings.length === 0) return null;
 
     return (
-        <div style={{ marginTop: '30px' }}>
-            <h3>Detected Fraud Rings</h3>
-            <table border="1" cellPadding="10" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                <thead>
-                    <tr style={{ backgroundColor: '#f2f2f2' }}>
-                        <th>Ring ID</th>
-                        <th>Pattern Type</th>
-                        <th>Member Count</th>
-                        <th>Risk Score</th>
-                        <th>Member Accounts</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rings.map((ring) => (
-                        <tr key={ring.ring_id}>
-                            <td>{ring.ring_id}</td>
-                            <td>{ring.pattern_type}</td>
-                            <td>{ring.member_accounts.length}</td>
-                            <td>{ring.risk_score}</td>
-                            <td>{ring.member_accounts.join(', ')}</td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
+        <div className="card card--mini" style={{ border: 'none', background: 'transparent', boxShadow: 'none' }}>
+            <div className="table-container" style={{ maxHeight: '250px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0 0.5rem' }}>
+                    <tbody>
+                        {rings.map((ring) => (
+                            <tr key={ring.ring_id} style={{ background: 'white', border: '1px solid var(--border-subtle)' }}>
+                                <td style={{ padding: '0.75rem 0.5rem', borderTopLeftRadius: '8px', borderBottomLeftRadius: '8px' }}>
+                                    <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--primary)', textTransform: 'capitalize' }}>
+                                        {ring.pattern_type.replace(/_/g, ' ').toLowerCase()}
+                                    </div>
+                                    <div style={{ fontSize: '0.6rem', color: 'var(--text-ghost)', fontWeight: 600 }}>CLUST-{ring.ring_id.substring(0, 4)}</div>
+                                </td>
+                                <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', borderTopRightRadius: '8px', borderBottomRightRadius: '8px' }}>
+                                    <span className="badge" style={{ padding: '0.2rem 0.6rem', fontSize: '0.6rem', background: 'rgba(13, 148, 136, 0.08)', color: 'var(--accent-teal)' }}>
+                                        {ring.member_accounts.length} Nodes
+                                    </span>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
         </div>
     );
 };

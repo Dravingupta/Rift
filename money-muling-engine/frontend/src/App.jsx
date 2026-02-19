@@ -4,13 +4,8 @@ import './App.css';
 
 function App() {
   return (
-    <div className="App">
-      <header>
-        <h1>Money Muling Detection Engine</h1>
-      </header>
-      <main>
-        <Home />
-      </main>
+    <div className="app-wrapper">
+      <Home />
     </div>
   );
 }

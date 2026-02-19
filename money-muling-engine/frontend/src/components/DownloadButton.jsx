@@ -7,10 +7,9 @@ const DownloadButton = ({ data }) => {
         const jsonString = JSON.stringify(data, null, 2);
         const blob = new Blob([jsonString], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
-
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'fraud_detection_results.json';
+        a.download = 'rift_intelligence_report.json';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -18,22 +17,25 @@ const DownloadButton = ({ data }) => {
     };
 
     return (
-        <div style={{ marginTop: '20px', textAlign: 'center' }}>
-            <button
-                onClick={handleDownload}
-                style={{
-                    padding: '10px 20px',
-                    backgroundColor: '#28a745',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    fontSize: '16px'
-                }}
-            >
-                Download JSON Report
-            </button>
-        </div>
+        <button
+            onClick={handleDownload}
+            className="btn"
+            style={{
+                width: 'auto',
+                border: '1.5px solid var(--border-default)',
+                color: 'var(--text-main)',
+                background: '#FFFFFF',
+                boxShadow: 'var(--shadow-flat)'
+            }}
+            id="download-report-btn"
+        >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-teal)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Export Intelligent Report
+        </button>
     );
 };
 
